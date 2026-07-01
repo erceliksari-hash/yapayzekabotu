@@ -8,91 +8,77 @@ import requests
 if 'watchlist' not in st.session_state: st.session_state.watchlist = ['BTC-USD', 'ETH-USD']
 if 'alarms' not in st.session_state: st.session_state.alarms = {}
 
-st.set_page_config(page_title="Borsa Ajanı Pro", layout="wide")
-st.title("🤖 Borsa Ajanı Pro - Otonom Analiz İstasyonu")
+st.set_page_config(page_title="Borsa Ajanı Pro - Final", layout="wide")
+st.title("🤖 Borsa Ajanı Pro - Strateji ve Analiz İstasyonu")
+
+# --- KENDİ İNDİKATÖRÜNÜ EKLEME ALANI ---
+def kendi_indikatorun_hesapla(df):
+    # Örnek: 20 periyotluk Hareketli Ortalama (SMA)
+    # Buraya kendi formülünü (örn: EMA, Bollinger, VWAP) yazabilirsin
+    df['Ozel_SMA'] = df['Close'].rolling(window=20).mean()
+    return df
 
 # --- YARDIMCI FONKSİYONLAR ---
 def veriyi_temizle(df):
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)
     return df
 
-def hesapla_indikatorler(df):
+def hesapla_tum_indikatorler(df):
     df = veriyi_temizle(df)
-    # RSI
+    # Standartlar
     delta = df['Close'].diff()
-    gain = delta.clip(lower=0); loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(com=13, adjust=False).mean()
-    avg_loss = loss.ewm(com=13, adjust=False).mean()
-    rs = avg_gain / avg_loss
-    df['RSI'] = 100 - (100 / (1 + rs))
-    # MACD
+    avg_gain = delta.clip(lower=0).ewm(com=13, adjust=False).mean()
+    avg_loss = (-delta.clip(upper=0)).ewm(com=13, adjust=False).mean()
+    df['RSI'] = 100 - (100 / (1 + (avg_gain / avg_loss)))
     df['MACD'] = df['Close'].ewm(span=12, adjust=False).mean() - df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD_Sinyal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    
+    # Özel İndikatörünü Çalıştır
+    df = kendi_indikatorun_hesapla(df)
     return df
 
-def grafik_analiz_et(df):
+def analiz_motoru(df):
     son = df.iloc[-1]
-    rsi = son['RSI']
-    macd = son['MACD']
-    sig = son['MACD_Sinyal']
+    # Destek/Direnç hesaplama
+    destek = df['Low'].rolling(20).min().iloc[-1]
+    direnc = df['High'].rolling(20).max().iloc[-1]
     
-    yorum = f"### 🧠 Yapay Zeka Grafik Yorumu\n"
-    yorum += f"- **RSI:** {rsi:.2f} " + ("(Aşırı Alım)" if rsi > 70 else ("(Aşırı Satım)" if rsi < 30 else "(Nötr)")) + "\n"
-    yorum += f"- **MACD:** " + ("Pozitif Momentum" if macd > sig else "Negatif Momentum") + "\n"
-    yorum += "- **Karar:** " + ("🚀 ALIM FIRSATI OLABİLİR" if (rsi < 40 and macd > sig) else ("📉 DİKKAT: SATIŞ BASKISI" if (rsi > 60 and macd < sig) else "⚖️ BEKLE/İZLE"))
-    return yorum
+    sinyal = "BEKLE"
+    if son['RSI'] < 40 and son['MACD'] > son['MACD_Sinyal']: sinyal = "🚀 GÜÇLÜ AL"
+    elif son['RSI'] > 60 and son['MACD'] < son['MACD_Sinyal']: sinyal = "📉 GÜÇLÜ SAT"
+    
+    return sinyal, destek, direnc
 
-# 2. SOL MENÜ (AYARLAR)
-st.sidebar.header("Portföy ve Alarm")
+# 2. SOL MENÜ
+st.sidebar.header("Portföy ve Strateji")
 token = st.sidebar.text_input("Telegram Token", type="password")
 cid = st.sidebar.text_input("Chat ID")
 
-# Kripto Seçimi ve Ekleme
-populer_coins = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'ADA-USD', 'BNB-USD', 'XRP-USD']
-yeni_eklenen = st.sidebar.selectbox("Kripto Seç:", populer_coins)
+populer_coins = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'BNB-USD', 'XRP-USD']
+secim = st.sidebar.selectbox("Kripto Ekle:", populer_coins)
 if st.sidebar.button("Listeye Ekle"):
-    if yeni_eklenen not in st.session_state.watchlist:
-        st.session_state.watchlist.append(yeni_eklenen)
-        st.rerun()
+    if secim not in st.session_state.watchlist: st.session_state.watchlist.append(secim)
 
-# Alarm Kurma
-secili_alarm = st.sidebar.selectbox("Alarm Kur:", st.session_state.watchlist)
-fiyat_seviyesi = st.sidebar.number_input("Alarm Seviyesi:", value=0.0)
-if st.sidebar.button("Alarmı Kur"):
-    st.session_state.alarms[secili_alarm] = fiyat_seviyesi
-
-# 3. OTONOM KONTROL
-if st.session_state.alarms:
-    for sembol, seviye in st.session_state.alarms.items():
-        df_anlik = veriyi_temizle(yf.download(sembol, period="1d", interval="1h", progress=False))
-        if not df_anlik.empty and float(df_anlik['Close'].iloc[-1]) <= seviye:
-            try: requests.get(f"https://api.telegram.org/bot{token}/sendMessage?chat_id={cid}&text=⚠️ ALARM! {sembol} düştü.")
-            except: pass
-
-# 4. ANALİZ VE GÖRSELLEŞTİRME
+# 3. ANALİZ EKRANI
 secili_sembol = st.selectbox("Analiz edilecek varlık:", st.session_state.watchlist)
 
-if st.button("Analiz Et"):
-    df = yf.download(secili_sembol, period="1mo", interval="1h")
-    if not df.empty:
-        df = hesapla_indikatorler(df)
-        
-        # Mum Grafiği
-        st.subheader(f"{secili_sembol} - Teknik Analiz")
-        fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
-        fig.update_layout(xaxis_rangeslider_visible=False)
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Mum Grafiği Nedir?
-        st.info("Mum grafikleri, bir zaman dilimindeki fiyat hareketlerini gösterir.")
-        
-        
-        # Analiz ve İndikatörler
-        st.markdown(grafik_analiz_et(df))
-        
-        c1, c2 = st.columns(2)
-        c1.line_chart(df['RSI'])
-        c2.line_chart(df[['MACD', 'MACD_Sinyal']])
-        
-        csv = df.to_csv().encode('utf-8')
-        st.download_button("📊 Raporu İndir", csv, "rapor.csv", "text/csv")
+if st.button("Analiz Et ve Strateji Uygula"):
+    df = hesapla_tum_indikatorler(yf.download(secili_sembol, period="1mo", interval="1h"))
+    sinyal, destek, direnc = analiz_motoru(df)
+    
+    st.subheader(f"Sinyal: {sinyal}")
+    col1, col2 = st.columns(2)
+    col1.metric("Tahmini Destek (Alış)", f"{destek:.2f}")
+    col2.metric("Tahmini Direnç (Satış)", f"{direnc:.2f}")
+    
+    # Grafik
+    fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
+    fig.add_trace(go.Scatter(x=df.index, y=df['Ozel_SMA'], name='Özel SMA İndikatörü', line=dict(color='orange')))
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # İndikatörler
+    c1, c2 = st.columns(2)
+    c1.line_chart(df['RSI'])
+    c2.line_chart(df[['MACD', 'MACD_Sinyal']])
+    
+    st.info("Destek ve Direnç seviyeleri, son 20 mumun en düşük ve en yüksek değerlerine göre belirlenmiştir.")
