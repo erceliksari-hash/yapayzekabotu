@@ -2,15 +2,28 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 
-# Sayfa tasarımı ayarları
-st.set_page_config(page_title="Borsa Ajanı Pro v2", layout="wide")
-st.title("Borsa Ajanı Pro - Teknik Analiz Paneli")
+# 1. SAYFA TASARIMI
+st.set_page_config(page_title="Borsa Ajanı Pro v4", layout="wide")
+st.title("Borsa Ajanı Pro - Otonom Analiz Sistemi")
 st.markdown("---")
 
-# Sol menü - Dinamik Parametre Ayarları
+# 2. SOL MENÜ VE ZAMAN AYARLARI
 st.sidebar.header("Strateji ve İndikatör Ayarları")
-sembol = st.sidebar.text_input("Varlık Sembolü (Örn: BTC-USD, ETH-USD, GC=F)", value="BTC-USD")
-periyot = st.sidebar.selectbox("Zaman Aralığı", ["1mo", "3mo", "6mo", "1y"], index=2)
+sembol = st.sidebar.text_input("Varlık Sembolü (Örn: BTC-USD, ETH-USD, AAPL)", value="BTC-USD")
+
+# Zaman Aralıkları Sözlüğü (Periyot ve Mum Aralığı)
+zaman_secenekleri = {
+    "5 Dakikalık Mumlar (Son 5 Gün)": ("5d", "5m"),
+    "15 Dakikalık Mumlar (Son 1 Ay)": ("1mo", "15m"),
+    "30 Dakikalık Mumlar (Son 1 Ay)": ("1mo", "30m"),
+    "1 Saatlik Mumlar (Son 1 Ay)": ("1mo", "1h"),
+    "Günlük Mumlar (Son 6 Ay)": ("6mo", "1d"),
+    "Günlük Mumlar (Son 1 Yıl)": ("1y", "1d"),
+    "Haftalık Mumlar (Son 2 Yıl)": ("2y", "1wk")
+}
+
+secilen_zaman = st.sidebar.selectbox("Mum Zaman Aralığı", list(zaman_secenekleri.keys()), index=4)
+periyot_degeri, interval_degeri = zaman_secenekleri[secilen_zaman]
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("İndikatör Parametreleri")
@@ -19,19 +32,17 @@ macd_hizli = st.sidebar.slider("MACD Hızlı Dönem", 5, 20, 12)
 macd_yavas = st.sidebar.slider("MACD Yavaş Dönem", 21, 50, 26)
 macd_sinyal = st.sidebar.slider("MACD Sinyal Dönemi", 5, 15, 9)
 
-# Veri çekme ve İndikatör Hesaplama Fonksiyonu
+# 3. VERİ ÇEKME VE İNDİKATÖR HESAPLAMA
 @st.cache_data
-def veri_isle(sembol, periyot, rsi_p, macd_f, macd_s, macd_sig):
-    # Veriyi indiriyoruz
-    veri = yf.download(sembol, period=periyot, interval="1d")
+def veri_isle(sembol, periyot, interval, rsi_p, macd_f, macd_s, macd_sig):
+    veri = yf.download(sembol, period=periyot, interval=interval)
     if veri.empty:
         return veri
         
-    # yfinance bazen çoklu indeks döndürebilir, bunu düzeltiyoruz
     if isinstance(veri.columns, pd.MultiIndex):
         veri.columns = veri.columns.droplevel(1)
         
-    # --- RSI HESAPLAMA (Wilder's Smoothing) ---
+    # --- RSI HESAPLAMA ---
     delta = veri['Close'].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -49,85 +60,91 @@ def veri_isle(sembol, periyot, rsi_p, macd_f, macd_s, macd_sig):
     
     return veri
 
-# Uygulamayı Çalıştırma Butonu
+# 4. ARAYÜZ VE KARAR MOTORU
 if st.sidebar.button("Stratejiyi Analiz Et"):
-    with st.spinner("Piyasa verileri taranıyor ve indikatörler hesaplanıyor..."):
-        df = veri_isle(sembol, periyot, rsi_periyot, macd_hizli, macd_yavas, macd_sinyal)
+    with st.spinner("Piyasa verileri taranıyor..."):
+        df = veri_isle(sembol, periyot_degeri, interval_degeri, rsi_periyot, macd_hizli, macd_yavas, macd_sinyal)
         
         if not df.empty:
-            st.success(f"{sembol} İçin Analiz Tamamlandı!")
+            st.success(f"{sembol} İçin Analiz Tamamlandı! ({secilen_zaman})")
             
-            # 1. GRAFİK: FİYAT HAREKETİ
+            # --- 1. GRAFİKLER BÖLÜMÜ ---
             st.subheader("1. Varlık Kapanış Fiyatı")
             st.line_chart(df['Close'])
             
-            # Ekranı yan yana iki bölüme ayırarak indikatörleri yerleştiriyoruz
             col1, col2 = st.columns(2)
-            
             with col1:
-                # 2. GRAFİK: RSI
-                st.subheader(f"2. RSI (Periyot: {rsi_periyot})")
+                st.subheader("2. RSI Grafiği")
                 st.line_chart(df['RSI'])
-                st.caption("Kılavuz: 70 Üzeri Aşırı Alım (Satış Baskısı), 30 Altı Aşırı Satım (Alım Baskısı)")
-                
             with col2:
-                # 3. GRAFİK: MACD
-                st.subheader("3. MACD & Sinyal Çizgisi")
+                st.subheader("3. MACD Grafiği")
                 st.line_chart(df[['MACD', 'MACD_Sinyal']])
-                st.caption("Kılavuz: MACD çizgisi Sinyal çizgisini yukarı keserse AL, aşağı keserse SAT sinyali üretilir.")
                 
-            # Son Değerlerin Tablosu
+            # --- 2. OTOMATİK GRAFİK ANALİZİ (YENİ MODÜL) ---
             st.markdown("---")
-            st.subheader("Son 3 Günün İndikatör Değer Özetleri")
-            st.dataframe(df[['Close', 'RSI', 'MACD', 'MACD_Sinyal']].tail(3))
+            st.subheader("📊 Otomatik Grafik Analizi ve Yorumu")
             
-        else:
-            st.error("Veri alınamadı. Sembolün doğruluğundan emin olun.")
-# --- KARAR MEKANİZMASI (BOTUN BEYNİ) ---
-            st.markdown("---")
-            st.header("🤖 Yapay Zeka Karar Motoru")
-            
-            # DataFrame'deki en son satırı (en güncel veriyi) alıyoruz
             son_veri = df.iloc[-1]
+            eski_veri = df.iloc[-5] if len(df) >= 5 else df.iloc[0] # Son 5 mumluk değişime bakıyoruz
+            
+            fiyat_degisimi = son_veri['Close'] - eski_veri['Close']
+            trend_yonu = "yükseliş" if fiyat_degisimi > 0 else "düşüş"
+            
+            # Analiz Metnini Dinamik Olarak Oluşturma
+            analiz_metni = f"**Fiyat Hareketi:** {sembol} varlığının fiyatı son 5 mumluk periyotta **{trend_yonu}** eğilimindedir. Güncel kapanış fiyatı **{son_veri['Close']:.2f}** seviyesinde bulunuyor.\n\n"
+            
+            analiz_metni += f"**RSI (Göreceli Güç Endeksi):** Güncel RSI değeri **{son_veri['RSI']:.2f}**. "
+            if son_veri['RSI'] > 70:
+                analiz_metni += "Bu durum, varlığın 'Aşırı Alım' bölgesinde olduğunu gösterir. Piyasada alıcılar çok yorulmuş olabilir ve fiyatta aşağı yönlü bir düzeltme ihtimali masadadır."
+            elif son_veri['RSI'] < 30:
+                analiz_metni += "Bu durum, varlığın 'Aşırı Satım' bölgesinde olduğunu gösterir. Varlık kısa vadede ucuzlamış olabilir ve yukarı yönlü bir tepki alımı gelebilir."
+            else:
+                analiz_metni += "RSI nötr bölgede (30-70 arası) yer alıyor. Şu an için piyasada net bir aşırı alım veya aşırı satım baskısı gözlemlenmiyor."
+                
+            analiz_metni += f"\n\n**MACD (Hareketli Ortalamalar):** MACD çizgisi ({son_veri['MACD']:.2f}), Sinyal çizgisinin ({son_veri['MACD_Sinyal']:.2f}) "
+            if son_veri['MACD'] > son_veri['MACD_Sinyal']:
+                analiz_metni += "**üzerinde** yer alıyor. Bu kesişim, kısa vadeli momentumun pozitif olduğunu ve alıcıların (boğaların) piyasaya hakim olmaya çalıştığını işaret eder."
+            else:
+                analiz_metni += "**altında** yer alıyor. Bu kesişim, kısa vadeli momentumun negatif olduğunu ve satıcıların (ayıların) baskın olduğunu gösterir."
+            
+            # Metni ekrana mavi bir bilgi kutusu içinde yazdır
+            st.info(analiz_metni)
+
+            # --- 3. YAPAY ZEKA KARAR MOTORU (BEYİN) ---
+            st.markdown("---")
+            st.header("🤖 Karar Motoru Sonuçları")
+            
             son_rsi = son_veri['RSI']
             son_macd = son_veri['MACD']
             son_sinyal = son_veri['MACD_Sinyal']
             
-            # Karar ekranı için 3 kolon oluşturuyoruz
             karar_col1, karar_col2, karar_col3 = st.columns(3)
             
             with karar_col1:
                 st.subheader("RSI Stratejisi")
                 if son_rsi < 30:
-                    st.success(f"🟢 GÜÇLÜ AL\nRSI: {son_rsi:.2f}")
-                    st.caption("Aşırı satım bölgesinde, fiyat ucuzlamış olabilir.")
+                    st.success(f"🟢 GÜÇLÜ AL (RSI: {son_rsi:.2f})")
                 elif son_rsi > 70:
-                    st.error(f"🔴 GÜÇLÜ SAT\nRSI: {son_rsi:.2f}")
-                    st.caption("Aşırı alım bölgesinde, fiyatta şişkinlik olabilir.")
+                    st.error(f"🔴 GÜÇLÜ SAT (RSI: {son_rsi:.2f})")
                 else:
-                    st.warning(f"🟡 BEKLE\nRSI: {son_rsi:.2f}")
-                    st.caption("Piyasa şu an nötr bölgede (30-70 arası).")
+                    st.warning(f"🟡 BEKLE (RSI: {son_rsi:.2f})")
 
             with karar_col2:
                 st.subheader("MACD Stratejisi")
                 if son_macd > son_sinyal:
-                    st.success(f"🟢 AL YÖNÜNDE\nMACD, Sinyalin Üzerinde")
-                    st.caption("Yükseliş trendi (Boğa piyasası) sinyali.")
+                    st.success("🟢 AL YÖNÜNDE")
                 elif son_macd < son_sinyal:
-                    st.error(f"🔴 SAT YÖNÜNDE\nMACD, Sinyalin Altında")
-                    st.caption("Düşüş trendi (Ayı piyasası) sinyali.")
+                    st.error("🔴 SAT YÖNÜNDE")
                 else:
-                    st.warning("🟡 YÖNSÜZ\nKesişim Noktasında")
+                    st.warning("🟡 YÖNSÜZ")
                     
             with karar_col3:
                 st.subheader("BİRLEŞTİRİLMİŞ SONUÇ")
-                # İki indikatör de AL diyorsa
-                if (son_rsi < 30 or son_rsi < 40) and (son_macd > son_sinyal):
+                if (son_rsi < 40) and (son_macd > son_sinyal):
                     st.success("🚀 KESİN AL SİNYALİ!")
-                # İki indikatör de SAT diyorsa
-                elif (son_rsi > 70 or son_rsi > 60) and (son_macd < son_sinyal):
+                elif (son_rsi > 60) and (son_macd < son_sinyal):
                     st.error("📉 KESİN SAT SİNYALİ!")
-                # İndikatörler uyumsuzsa
                 else:
-                    st.info("⚖️ KARARSIZ PİYASA (İŞLEME GİRME)")
-      
+                    st.info("⚖️ KARARSIZ PİYASA (BEKLE)")
+        else:
+            st.error("Veri alınamadı. Sembol veya zaman aralığı uyumsuz olabilir.")
