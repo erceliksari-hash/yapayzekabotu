@@ -29,19 +29,16 @@ def veriyi_temizle(df):
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)
     return df
 
-# --- KENDİ İNDİKATÖRÜNÜ EKLEME ALANI ---
 def kendi_indikatorun_hesapla(df):
     df['Ozel_SMA'] = df['Close'].rolling(window=20).mean()
     return df
 
 def hesapla_tum_indikatorler(df):
     df = veriyi_temizle(df)
-    # RSI
     delta = df['Close'].diff()
     avg_gain = delta.clip(lower=0).ewm(com=13, adjust=False).mean()
     avg_loss = (-delta.clip(upper=0)).ewm(com=13, adjust=False).mean()
     df['RSI'] = 100 - (100 / (1 + (avg_gain / avg_loss)))
-    # MACD
     df['MACD'] = df['Close'].ewm(span=12, adjust=False).mean() - df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD_Sinyal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     return kendi_indikatorun_hesapla(df)
@@ -81,20 +78,25 @@ if st.session_state.alarms:
 
 # 4. GRAFİK VE ANALİZ
 if st.button("Analiz Et"):
-    df = hesapla_tum_indikatorler(yf.download(secili_sembol, period="1mo", interval=interval_val))
-    
-    st.subheader(f"{secili_sembol} Teknik Analiz Grafiği")
-    fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
-    fig.add_trace(go.Scatter(x=df.index, y=df['Ozel_SMA'], name='Özel İndikatör', line=dict(color='orange')))
-    st.plotly_chart(fig, use_container_width=True)
-    
-    
-    
-    c1, c2 = st.columns(2)
-    c1.line_chart(df['RSI'])
-    c2.line_chart(df[['MACD', 'MACD_Sinyal']])
-    
-    # EXCEL AYARI: En yakın tarih en üstte olacak şekilde sırala
-    df_export = df.sort_index(ascending=False)
-    csv = df_export.to_csv().encode('utf-8')
-    st.download_button("📊 Verileri İndir (En güncel tarih üstte)", csv, "rapor.csv", "text/csv")
+    df = yf.download(secili_sembol, period="1mo", interval=interval_val)
+    if not df.empty:
+        df = hesapla_tum_indikatorler(df)
+        
+        st.subheader(f"{secili_sembol} Teknik Analiz Grafiği")
+        
+        # Plotly grafiklerini tetiklemek için açıkça tanımlıyoruz
+        fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
+        fig.add_trace(go.Scatter(x=df.index, y=df['Ozel_SMA'], name='Özel İndikatör', line=dict(color='orange')))
+        st.plotly_chart(fig, use_container_width=True)
+        
+        
+        
+        c1, c2 = st.columns(2)
+        c1.line_chart(df['RSI'])
+        c2.line_chart(df[['MACD', 'MACD_Sinyal']])
+        
+        df_export = df.sort_index(ascending=False)
+        csv = df_export.to_csv().encode('utf-8')
+        st.download_button("📊 Verileri İndir (En güncel tarih üstte)", csv, "rapor.csv", "text/csv")
+    else:
+        st.error("Veri alınamadı. Lütfen seçili kriptonun seçilen zaman aralığında veri ürettiğinden emin olun.")
