@@ -5,96 +5,78 @@ import plotly.graph_objects as go
 import requests
 
 # 1. OTURUM AYARLARI
-if 'watchlist' not in st.session_state:
-    st.session_state.watchlist = ['BTC-USD', 'ETH-USD']
+if 'watchlist' not in st.session_state: st.session_state.watchlist = ['BTC-USD', 'ETH-USD']
+if 'alarms' not in st.session_state: st.session_state.alarms = {}
 
-st.set_page_config(page_title="Borsa Ajanı Pro - Final", layout="wide")
-st.title("📈 Borsa Ajanı Pro - Otonom Kripto Ajanı")
+st.set_page_config(page_title="Borsa Ajanı Pro - Otonom", layout="wide")
+st.title("🤖 Borsa Ajanı Pro - Otonom İzleme Sistemi")
 
-# Telegram Bildirim Fonksiyonu
+# Yardımcı Fonksiyonlar
 def telegram_bildir(mesaj, token, chat_id):
     try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage?chat_id={chat_id}&text={mesaj}"
-        requests.get(url)
-    except:
-        pass
+        if token and chat_id:
+            requests.get(f"https://api.telegram.org/bot{token}/sendMessage?chat_id={chat_id}&text={mesaj}")
+    except: pass
 
-# CoinGecko'dan En İyi 20 Kriptoyu Çekme
 def coin_listesi_cek():
     try:
         url = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1"
-        response = requests.get(url)
-        if response.status_code == 200:
-            data = response.json()
-            return [f"{coin['symbol'].upper()}-USD" for coin in data]
-    except:
-        return ['BTC-USD', 'ETH-USD', 'SOL-USD']
-    return ['BTC-USD', 'ETH-USD']
+        data = requests.get(url).json()
+        return [f"{c['symbol'].upper()}-USD" for c in data]
+    except: return ['BTC-USD', 'ETH-USD']
 
-# 2. SOL MENÜ VE PORTFÖY YÖNETİMİ
+# 2. SOL MENÜ (AYARLAR VE ALARMLAR)
 st.sidebar.header("Portföy Yönetimi")
-telegram_token = st.sidebar.text_input("Telegram Bot Token", type="password")
-chat_id = st.sidebar.text_input("Chat ID")
+token = st.sidebar.text_input("Telegram Bot Token", type="password")
+cid = st.sidebar.text_input("Chat ID")
 
 st.sidebar.markdown("---")
 populer_coins = coin_listesi_cek()
-yeni_eklenen = st.sidebar.selectbox("Popüler Kriptolardan Seç:", populer_coins)
-
+yeni_eklenen = st.sidebar.selectbox("Varlık Seç ve Ekle:", populer_coins)
 if st.sidebar.button("Listeye Ekle"):
     if yeni_eklenen not in st.session_state.watchlist:
         st.session_state.watchlist.append(yeni_eklenen)
         st.rerun()
 
-st.sidebar.markdown("### İzleme Listeniz")
-for sembol in st.session_state.watchlist:
-    col_a, col_b = st.sidebar.columns([3, 1])
-    col_a.write(sembol)
-    if col_b.button("🗑️", key=f"del_{sembol}"):
-        st.session_state.watchlist.remove(sembol)
-        st.rerun()
+st.sidebar.markdown("---")
+st.sidebar.subheader("Alarm Kur")
+secili_alarm = st.sidebar.selectbox("Alarm Kurulacak Varlık:", st.session_state.watchlist)
+fiyat_seviyesi = st.sidebar.number_input("Alarm Fiyatı:", value=0.0)
+if st.sidebar.button("Alarmı Kur"):
+    st.session_state.alarms[secili_alarm] = fiyat_seviyesi
+    st.sidebar.success("Alarm başarıyla eklendi!")
 
-# 3. VERİ İŞLEME
-@st.cache_data
-def veri_isle(sembol, periyot, interval):
-    df = yf.download(sembol, period=periyot, interval=interval)
-    if df.empty: return df
-    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)
-    
-    # İndikatörler
-    delta = df['Close'].diff()
-    df['RSI'] = 100 - (100 / (1 + (delta.clip(lower=0).ewm(com=13).mean() / (-delta.clip(upper=0)).ewm(com=13).mean())))
-    df['MACD'] = df['Close'].ewm(span=12, adjust=False).mean() - df['Close'].ewm(span=26, adjust=False).mean()
-    df['MACD_Sinyal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-    return df
-
-# 4. ANALİZ EKRANI
-secili_sembol = st.selectbox("Analiz edilecek varlığı seç:", st.session_state.watchlist)
-
-if st.button("Analiz Et ve Raporla"):
-    with st.spinner(f"{secili_sembol} analiz ediliyor..."):
-        df = veri_isle(secili_sembol, "1mo", "1h")
-        
+# 3. OTONOM KONTROL MEKANİZMASI (Sayfa açıldığında otomatik çalışır)
+if st.session_state.alarms:
+    st.info("🔄 Otonom Kontrol: Alarmlarınız taranıyor...")
+    for sembol, seviye in st.session_state.alarms.items():
+        df = yf.download(sembol, period="1d", interval="1h", progress=False)
         if not df.empty:
-            st.subheader(f"{secili_sembol} Fiyat Hareketi")
-            fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
-            fig.update_layout(xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig, use_container_width=True)
-            
-            
-            # Excel İndirme
-            csv = df.to_csv().encode('utf-8')
-            st.download_button("📊 Verileri İndir (CSV)", csv, f"{secili_sembol}_data.csv", "text/csv")
-            
-            # Karar ve Bildirim
-            son = df.iloc[-1]
-            sinyal = "BEKLE"
-            if son['RSI'] < 40 and son['MACD'] > son['MACD_Sinyal']: sinyal = "GÜÇLÜ AL"
-            elif son['RSI'] > 60 and son['MACD'] < son['MACD_Sinyal']: sinyal = "GÜÇLÜ SAT"
-            
-            st.info(f"Karar: {sinyal} | RSI: {son['RSI']:.2f}")
-            
-            if sinyal != "BEKLE" and telegram_token and chat_id:
-                telegram_bildir(f"Sinyal: {secili_sembol} - {sinyal}", telegram_token, chat_id)
-                st.success("Telegram bildirimi gönderildi!")
-        else:
-            st.error("Veri alınamadı.")
+            fiyat = float(df['Close'].iloc[-1])
+            if fiyat <= seviye:
+                mesaj = f"⚠️ ALARM! {sembol} fiyatı {fiyat:.2f} seviyesine geriledi!"
+                telegram_bildir(mesaj, token, cid)
+                st.warning(mesaj)
+
+# 4. GRAFİK VE ANALİZ
+st.subheader("Varlık Analizi")
+secili_sembol = st.selectbox("Grafiğini İncele:", st.session_state.watchlist)
+
+if st.button("Güncel Analiz Et"):
+    df = yf.download(secili_sembol, period="1mo", interval="1h")
+    if not df.empty:
+        # Mum Grafiği
+        fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
+        fig.update_layout(xaxis_rangeslider_visible=False)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Mum Grafiği Anatomisi
+        
+        
+        # İndirme
+        csv = df.to_csv().encode('utf-8')
+        st.download_button("📊 Verileri Excel (CSV) Olarak İndir", csv, f"{secili_sembol}_data.csv", "text/csv")
+        
+        st.success(f"{secili_sembol} teknik analizi güncellendi.")
+    else:
+        st.error("Veri alınamadı.")
