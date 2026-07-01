@@ -1,6 +1,7 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import plotly.graph_objects as go # Mum grafiği için ekledik
 
 # 1. SAYFA TASARIMI
 st.set_page_config(page_title="Borsa Ajanı Pro v4", layout="wide")
@@ -59,7 +60,6 @@ def veri_isle(sembol, periyot, interval, rsi_p, macd_f, macd_s, macd_sig):
     veri['MACD_Hist'] = veri['MACD'] - veri['MACD_Sinyal']
     
     return veri
-
 # 4. ARAYÜZ VE KARAR MOTORU
 if st.sidebar.button("Stratejiyi Analiz Et"):
     with st.spinner("Piyasa verileri taranıyor..."):
@@ -68,9 +68,15 @@ if st.sidebar.button("Stratejiyi Analiz Et"):
         if not df.empty:
             st.success(f"{sembol} İçin Analiz Tamamlandı! ({secilen_zaman})")
             
-            # --- 1. GRAFİKLER BÖLÜMÜ ---
-            st.subheader("1. Varlık Kapanış Fiyatı")
-            st.line_chart(df['Close'])
+            # --- YENİ: MUM GRAFİĞİ (CANDLESTICK) ---
+            st.subheader("1. Varlık Fiyat Hareketi (Mum Grafiği)")
+            fig = go.Figure(data=[go.Candlestick(x=df.index,
+                            open=df['Open'],
+                            high=df['High'],
+                            low=df['Low'],
+                            close=df['Close'])])
+            fig.update_layout(xaxis_rangeslider_visible=False)
+            st.plotly_chart(fig, use_container_width=True)
             
             col1, col2 = st.columns(2)
             with col1:
@@ -79,6 +85,7 @@ if st.sidebar.button("Stratejiyi Analiz Et"):
             with col2:
                 st.subheader("3. MACD Grafiği")
                 st.line_chart(df[['MACD', 'MACD_Sinyal']])
+
                 
             # --- 2. OTOMATİK GRAFİK ANALİZİ (YENİ MODÜL) ---
             st.markdown("---")
